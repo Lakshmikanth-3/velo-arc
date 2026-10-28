@@ -17,3 +17,12 @@ contract TestToken is ERC20 {
         return super.transfer(to, amount);
     }
 }
+
+/// Local stand-in for Circle's Gateway Wallet: pulls the deposit and credits the depositor.
+contract MockGatewayWallet {
+    mapping(address => uint256) public availableBalance;
+    function depositFor(address token, address depositor, uint256 value) external {
+        require(ERC20(token).transferFrom(msg.sender, address(this), value), "transfer");
+        availableBalance[depositor] += value;
+    }
+}

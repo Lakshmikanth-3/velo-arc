@@ -27,7 +27,7 @@ test('frontend: every control and link works end to end', { timeout: 300_000 }, 
   try {
     await server.provider.request({ method: 'evm_setAccountCode', params: [USDC, art('TestToken').deployedBytecode] });
     await p.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: USDC, abi: art('TestToken').abi, functionName: 'mint', args: [owner.address, 5_000_000n] }) });
-    const factory = (await p.waitForTransactionReceipt({ hash: await wallet.deployContract({ abi: factoryAbi, bytecode: art('ArcVaultFactory').bytecode, args: [USDC] }) })).contractAddress!;
+    const factory = (await p.waitForTransactionReceipt({ hash: await wallet.deployContract({ abi: factoryAbi, bytecode: art('ArcVaultFactory').bytecode, args: [USDC, '0x0000000000000000000000000000000000000000'] }) })).contractAddress!;
     const registry = (await p.waitForTransactionReceipt({ hash: await wallet.deployContract({ abi: registryAbi, bytecode: art('MerchantRegistry').bytecode, args: [owner.address] }) })).contractAddress!;
     await p.waitForTransactionReceipt({ hash: await wallet.writeContract({ address: registry, abi: registryAbi, functionName: 'setMerchant', args: [merchant.address, true, 'Test merchant'] }) });
 

@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createPublicClient, http, erc20Abi, encodeDeployData, formatUnits } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { arcMainnet, USDC } from '../src/lib/arc/config';
+import { arcMainnet, USDC, GATEWAY_WALLET } from '../src/lib/arc/config';
 import { factoryAbi, registryAbi } from '../src/lib/arc/abi';
 import deployment from '../src/lib/arc/testnet-deployment.json';
 
@@ -76,7 +76,7 @@ async function main() {
     if (deployer) {
       if (mainEnv.ARC_DEPLOYER_ADDRESS) record('Deployer key matches ARC_DEPLOYER_ADDRESS', deployer.toLowerCase() === mainEnv.ARC_DEPLOYER_ADDRESS.toLowerCase(), deployer);
       const art = (n: string) => JSON.parse(readFileSync(`../contracts/arc/artifacts/${n}.json`, 'utf8')).bytecode as `0x${string}`;
-      const gas = await m.estimateGas({ account: deployer, data: encodeDeployData({ abi: factoryAbi, bytecode: art('ArcVaultFactory'), args: [USDC] }) })
+      const gas = await m.estimateGas({ account: deployer, data: encodeDeployData({ abi: factoryAbi, bytecode: art('ArcVaultFactory'), args: [USDC, GATEWAY_WALLET.mainnet] }) })
         + await m.estimateGas({ account: deployer, data: encodeDeployData({ abi: registryAbi, bytecode: art('MerchantRegistry'), args: [deployer] }) })
         + 1_500_000n; // vault, deposit, authorize, payment, revoke, withdraw
       const price = await m.getGasPrice();

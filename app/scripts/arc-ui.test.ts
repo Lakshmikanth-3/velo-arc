@@ -27,7 +27,7 @@ test('browser owner creates/funds vault, authorizes agent; agent pays; owner rev
     await server.provider.request({ method: 'evm_setAccountCode', params: [USDC, token.deployedBytecode] });
     const mint = await wallet.writeContract({ address: USDC, abi: token.abi, functionName: 'mint', args: [owner.address, 1_000_000n] });
     await p.waitForTransactionReceipt({ hash: mint });
-    const hash = await wallet.deployContract({ abi: factoryAbi, bytecode: artifact.bytecode, args: [USDC] });
+    const hash = await wallet.deployContract({ abi: factoryAbi, bytecode: artifact.bytecode, args: [USDC, '0x0000000000000000000000000000000000000000'] });
     const factory = (await p.waitForTransactionReceipt({ hash })).contractAddress!;
     const require = createRequire(import.meta.url);
     child = spawn(process.execPath, [require.resolve('next/dist/bin/next'), 'dev', '-p', '13012'], {

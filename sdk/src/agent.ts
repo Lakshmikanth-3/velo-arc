@@ -10,13 +10,13 @@ export class ArcExecutionError extends Error {
 export class ArcPolicyRejection extends Error {
   constructor(readonly reason: string, readonly recipient: string, readonly amount: string) { super(`Vault rejected payment: ${reason}`); }
 }
-export type ArcEvent = { type: 'paid' | 'rejected' | 'gas'; vault: Address; agent: Address; recipient?: string; amount?: string; reason?: string; hash?: Hex };
+export type ArcEvent = { type: 'paid' | 'rejected' | 'gas' | 'gateway'; vault: Address; agent: Address; recipient?: string; amount?: string; reason?: string; hash?: Hex };
 export type ArcAgentOptions = { rpc?: string; onEvent?: (e: ArcEvent) => void | Promise<void>; minGas?: string };
 
 /** Deterministic invoice hash: the same order can never be paid twice. */
 export const invoiceId = (invoice: unknown) => keccak256(toHex(typeof invoice === 'string' ? invoice : JSON.stringify(invoice)));
 
-/** Agent-side client. The key only ever calls pay() and topUpGas(); the vault enforces the owner's policy. */
+/** Agent-side client. The key only ever calls pay(), topUpGas() and fundGateway(); the vault enforces the owner's policy. */
 export class ArcAgent {
   readonly chain: Chain;
   readonly publicClient: PublicClient<Transport, Chain>;
@@ -72,6 +72,32 @@ export class ArcAgent {
     await this.publicClient.waitForTransactionReceipt({ hash, timeout: 90000 });
     await this.emit({ type: 'gas', amount: String(amount), hash });
     return hash;
+  }
+  /**
+   * Moves USDC from the vault into this agent's Circle Gateway balance, within the owner's Gateway allowance,
+   * lifetime budget and daily limit. The agent can then pay any x402 seller through Gateway (e.g. with
+   * GatewayClient from @circle-fin/x402-batching) without one on-chain transaction per payment.
+   */
+  async fundGateway(amount: string) {
+    const units = usdcAmount(amount);
+    let request;
+    try {
+      ({ request } = await this.publicClient.simulateContract({ account: this.account, address: this.vault, abi: vaultAbi, functionName: 'fundGateway', args: [units] }));
+    } catch (error) {
+      const r = error instanceof BaseError ? error.walk(e => e instanceof ContractFunctionRevertedError) : undefined;
+      if (!(r instanceof ContractFunctionRevertedError)) throw error;
+      const reason = r.data?.errorName ?? 'Reverted';
+      await this.emit({ type: 'rejected', recipient: 'gateway', amount, reason });
+      throw new ArcPolicyRejection(reason, 'gateway', amount);
+    }
+    const hash = await this.walletClient.writeContract(request);
+    let receipt;
+    try { receipt = await this.publicClient.waitForTransactionReceipt({ hash, timeout: 90000 }); }
+    catch { throw new ArcExecutionError(hash, 'unknown', 'Gateway funding submitted; receipt unavailable. Reconcile hash before retrying.'); }
+    if (receipt.status !== 'success') throw new ArcExecutionError(hash, 'reverted', 'Gateway funding reverted');
+    const [funded] = parseEventLogs({ abi: vaultAbi, eventName: 'GatewayFunded', logs: receipt.logs });
+    await this.emit({ type: 'gateway', amount, hash });
+    return { ok: true, hash, amountUnits: String(units), remainingBudget: String(funded?.args.remainingBudget ?? 0n) };
   }
   async pay(recipient: string, amount: string, paymentId: Hex) {
     if (!/^0x[0-9a-fA-F]{64}$/.test(paymentId) || /^0x0{64}$/.test(paymentId)) throw new Error('Nonzero bytes32 payment ID required');

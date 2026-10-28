@@ -7,8 +7,8 @@ const sources = Object.fromEntries(['ArcVault.sol', 'TestToken.sol'].map(name =>
 export const input = { language: 'Solidity', sources, settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: 'paris', outputSelection: { '*': { '*': ['abi', 'evm.bytecode.object', 'evm.deployedBytecode.object'] } } } };
 const output = JSON.parse(solc.compile(JSON.stringify(input), { import: path => { try { return { contents: readFileSync(require.resolve(path), 'utf8') }; } catch { return { error: `Import unavailable: ${path}` }; } } }));
 for (const error of output.errors ?? []) { if (error.severity === 'error') throw new Error(error.formattedMessage); }
-export const artifacts = Object.fromEntries(['ArcVault', 'ArcVaultFactory', 'MerchantRegistry', 'TestToken'].map(name => {
-  const c = output.contracts[name === 'TestToken' ? 'TestToken.sol' : 'ArcVault.sol'][name];
+export const artifacts = Object.fromEntries(['ArcVault', 'ArcVaultFactory', 'MerchantRegistry', 'TestToken', 'MockGatewayWallet'].map(name => {
+  const c = output.contracts[name === 'TestToken' || name === 'MockGatewayWallet' ? 'TestToken.sol' : 'ArcVault.sol'][name];
   return [name, { abi: c.abi, bytecode: `0x${c.evm.bytecode.object}`, deployedBytecode: `0x${c.evm.deployedBytecode.object}` }];
 }));
 mkdirSync('../contracts/arc/artifacts', { recursive: true });

@@ -27,6 +27,14 @@ const { response } = await fetchWithPayment(agent, 'https://velo402.vercel.app/a
 
 Only `pay()` and `topUpGas()`. Both are checked by the contract against the owner's policy: active, not expired, recipient allowed (list or opted-in merchant registry), unique invoice, per-payment limit, daily limit, lifetime budget, gas allowance and vault balance. A rejected payment throws `ArcPolicyRejection` with the contract's reason and moves nothing.
 
+## Circle Gateway
+
+```ts
+await agent.fundGateway('0.50'); // vault → agent's Circle Gateway balance, within the owner's Gateway allowance
+```
+
+The owner first calls `setGatewayAllowance(agent, amount)` on the vault. The agent can then pay any x402 seller through Gateway, for example with `GatewayClient` from `@circle-fin/x402-batching`. A refusal throws `ArcPolicyRejection` (`GatewayLimit`, `TotalLimit`, `DailyLimit`, `Unauthorized`, `Expired`, `GatewayDisabled`).
+
 ## HTTP 402 scheme
 
 `velo402-vault`, x402-style. The server answers `402` with `{ x402Version: 1, accepts: [{ scheme, network, payTo, maxAmountRequired, asset, resource, invoice }] }`. The client pays with `paymentId = keccak256(invoice)` and retries with `X-PAYMENT: base64({ txHash, invoice })`. The server verifies on Arc that the transaction moved USDC from a factory vault to `payTo`, for at least the price, bound to that invoice.

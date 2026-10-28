@@ -19,7 +19,8 @@ test('Arc vault: complete flow and enforcement on a local EVM (not Arc evidence)
     return receipt.contractAddress;
   };
   const token = await deploy('TestToken');
-  const factory = await deploy('ArcVaultFactory', [token]);
+  const gateway = await deploy('MockGatewayWallet');
+  const factory = await deploy('ArcVaultFactory', [token, gateway]);
   const read = (target, name, fn, args = []) => publicClient.readContract({ address: target, abi: artifacts[name].abi, functionName: fn, args });
   const write = async (wallet, target, name, fn, args = []) => {
     const { request } = await publicClient.simulateContract({ account: wallet.account, address: target, abi: artifacts[name].abi, functionName: fn, args });
@@ -161,6 +162,44 @@ test('Arc vault: complete flow and enforcement on a local EVM (not Arc evidence)
       await deny(wallets[0], vault, 'ArcVault', 'authorize', [agent.address, P(20_000_000n, 2_000_000n, exp), []], 'InvalidInput');
       await deny(wallets[0], vault, 'ArcVault', 'authorize', [agent.address, P(20_000_000n, 2_000_000n, exp, { maxPerDay: 1n }), [recipient.address]], 'InvalidInput');
       await deny(wallets[0], vault, 'ArcVault', 'authorize', [agent.address, P(20_000_000n, 2_000_000n, exp, { gasAllowance: 30_000_000n }), [recipient.address]], 'InvalidInput');
+    });
+    await t.test('Gateway funding is bounded by its allowance, budget and revocation, and credits the agent', async () => {
+      assert.equal((await read(vault, 'ArcVault', 'gatewayWallet')).toLowerCase(), gateway.toLowerCase());
+      await write(wallets[0], token, 'TestToken', 'mint', [owner.address, 5_000_000n]);
+      await write(wallets[0], token, 'TestToken', 'approve', [vault, 5_000_000n]);
+      await write(wallets[0], vault, 'ArcVault', 'deposit', [5_000_000n]);
+      const spent0 = (await read(vault, 'ArcVault', 'capabilities', [agent.address]))[4];
+      const exp = (await publicClient.getBlock()).timestamp + 3600n;
+      await write(wallets[0], vault, 'ArcVault', 'authorize', [agent.address, P(spent0 + 2_000_000n, 1_000_000n, exp), [recipient.address]]);
+      await deny(wallets[1], vault, 'ArcVault', 'fundGateway', [1n], 'GatewayLimit');
+      await deny(wallets[1], vault, 'ArcVault', 'setGatewayAllowance', [agent.address, 1_000_000n], 'NotOwner');
+      await deny(wallets[0], vault, 'ArcVault', 'setGatewayAllowance', [outsider.address, 1_000_000n], 'InvalidInput');
+      await write(wallets[0], vault, 'ArcVault', 'setGatewayAllowance', [agent.address, 1_000_000n]);
+      const before = await read(vault, 'ArcVault', 'balance');
+      const receipt = await write(wallets[1], vault, 'ArcVault', 'fundGateway', [600_000n]);
+      const funded = receipt.logs.filter(l => l.address.toLowerCase() === vault.toLowerCase()).map(l => decodeEventLog({ abi: artifacts.ArcVault.abi, ...l })).find(e => e.eventName === 'GatewayFunded');
+      assert.equal(funded.args.remainingBudget, 1_400_000n);
+      assert.equal(await read(gateway, 'MockGatewayWallet', 'availableBalance', [agent.address]), 600_000n);
+      assert.equal(before - await read(vault, 'ArcVault', 'balance'), 600_000n);
+      assert.equal(await read(token, 'TestToken', 'allowance', [vault, gateway]), 0n);
+      await deny(wallets[1], vault, 'ArcVault', 'fundGateway', [500_000n], 'GatewayLimit');
+      await deny(wallets[3], vault, 'ArcVault', 'fundGateway', [1n], 'GatewayLimit');
+      // Gateway funding shares the lifetime budget with payments: 1.1M paid leaves 300k of budget for 400k of allowance.
+      await write(wallets[1], vault, 'ArcVault', 'pay', [recipient.address, 1_000_000n, id('gw1')]);
+      await write(wallets[1], vault, 'ArcVault', 'pay', [recipient.address, 100_000n, id('gw2')]);
+      await deny(wallets[1], vault, 'ArcVault', 'fundGateway', [400_000n], 'TotalLimit');
+      await write(wallets[1], vault, 'ArcVault', 'fundGateway', [300_000n]);
+      assert.equal(await read(vault, 'ArcVault', 'gatewayFunded', [agent.address]), 900_000n);
+      await write(wallets[0], vault, 'ArcVault', 'revoke', [agent.address]);
+      await write(wallets[0], vault, 'ArcVault', 'setGatewayAllowance', [agent.address, 5_000_000n]);
+      await deny(wallets[1], vault, 'ArcVault', 'fundGateway', [1n], 'Unauthorized');
+    });
+    await t.test('Gateway funding is disabled when the factory has no Gateway Wallet', async () => {
+      const plain = await deploy('ArcVaultFactory', [token, '0x0000000000000000000000000000000000000000']);
+      await write(wallets[0], plain, 'ArcVaultFactory', 'createVault');
+      const v = await read(plain, 'ArcVaultFactory', 'vaultOf', [owner.address]);
+      await deny(wallets[0], v, 'ArcVault', 'setGatewayAllowance', [agent.address, 1n], 'GatewayDisabled');
+      await deny(wallets[1], v, 'ArcVault', 'fundGateway', [1n], 'GatewayDisabled');
     });
   } finally { await provider.disconnect(); }
 });

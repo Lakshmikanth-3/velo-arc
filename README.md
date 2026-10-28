@@ -84,10 +84,19 @@ The owner puts USDC in a **vault contract** on Arc and grants an agent a **capab
 | Recipient allowlist | only `0xAPI…`, `0xData…`, editable one at a time |
 | Merchant registry (opt-in) | any merchant approved in a curated on-chain registry |
 | Gas allowance | the agent may draw up to 0.2 USDC for its own gas (USDC is Arc's gas token) |
+| Circle Gateway allowance | the agent may move up to 1 USDC into its own Circle Gateway balance, to pay any x402 seller |
 | Expiry | valid for 24 hours |
 | Revocation | owner can cancel at any moment |
 
 The agent signs its own payments, so it stays autonomous. The vault contract checks every rule **inside the same transaction that moves the USDC**. If a rule fails, the transaction reverts and nothing moves. A manipulated agent, or a thief with the agent's key, can only ever do what the owner allowed.
+
+### Paying any x402 API through Circle Gateway
+
+Vault payments only reach recipients the owner listed. To let an agent buy from **any** x402 seller, the owner sets a Gateway allowance with `setGatewayAllowance(agent, amount)`. The agent calls `fundGateway(amount)`, and the vault deposits that USDC into Circle's Gateway Wallet (`depositFor`) credited to the agent. The agent then pays sellers with gas-free, batched Gateway nanopayments.
+
+Gateway only accepts payments signed by a normal wallet, not by a contract (no ERC-1271), so the vault cannot sign those payments itself. Instead it caps how much the agent can ever move into Gateway. That deposit counts against the lifetime budget and the daily limit, and stops on expiry or revocation. Whatever the agent has already moved into Gateway is the most it can spend there, and revoking does not pull it back. Gateway Wallet addresses come from Circle's `@circle-fin/x402-batching` 4.0.0 (Arc mainnet `0x77777777Dcc4d5A8B6E418Fd04D8997ef11000eE`).
+
+> The contracts listed under "Live on Arc mainnet" are the first version, without Gateway funding. The Gateway version is tested locally (`pnpm arc:test`) and needs a new mainnet deployment.
 
 ## Why Arc
 
@@ -101,7 +110,7 @@ The agent signs its own payments, so it stays autonomous. The vault contract che
 - **Contracts:** vault, factory (several vaults per owner) and merchant registry.
 - **AI agent** ([`app/agent/ai-agent.ts`](app/agent/ai-agent.ts)): an LLM agent with `get_budget`, `buy_resource` and `pay` tools. Works with any OpenAI-compatible API (Groq free tier by default, or Ollama locally with no key).
 - **HTTP 402 pay-per-request API** ([`/api/x402/...`](app/src/app/api/x402)): returns `402` with an invoice; the agent pays from its vault; the server verifies the USDC transfer on Arc before serving data.
-- **Agent SDK** ([`sdk/`](sdk)): `@velo402/arc-sdk`, with `pay`, `check`, `ensureGas`, `invoiceId` and `fetchWithPayment`.
+- **Agent SDK** ([`sdk/`](sdk)): `@velo402/arc-sdk`, with `pay`, `check`, `ensureGas`, `fundGateway`, `invoiceId` and `fetchWithPayment`.
 - **Owner alerts:** webhook (Discord, Slack, Zapier), Telegram, and live in-app alerts.
 - **Console:** multi-wallet discovery (EIP-6963), multiple vaults, policy templates, spending dashboard by agent and recipient, explorer fallback for history.
 - **Developers page** (`/developers`): quickstart, comparison with other agent wallets, use cases, roadmap.

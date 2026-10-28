@@ -1,7 +1,7 @@
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createPublicClient, createWalletClient, http, erc20Abi, encodeDeployData, formatUnits, keccak256 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { network, USDC, address } from '../src/lib/arc/config';
+import { network, USDC, GATEWAY_WALLET, address } from '../src/lib/arc/config';
 import { factoryAbi, registryAbi } from '../src/lib/arc/abi';
 
 async function main() {
@@ -9,6 +9,7 @@ async function main() {
   const transport = http(process.env.ARC_RPC_URL ?? chain.rpcUrls.default.http[0], { retryCount: 0, timeout: 15000 });
   const publicClient = createPublicClient({ chain, transport });
   if (await publicClient.getChainId() !== chain.id) throw new Error('RPC chain mismatch');
+  const gateway = chain.id === 5042 ? GATEWAY_WALLET.mainnet : GATEWAY_WALLET.testnet;
   const decimals = await publicClient.readContract({ address: USDC, abi: erc20Abi, functionName: 'decimals' });
   if (decimals !== 6) throw new Error('USDC ERC-20 decimals mismatch');
   const artifact = JSON.parse(readFileSync('../contracts/arc/artifacts/ArcVaultFactory.json', 'utf8')) as { bytecode: `0x${string}` };
@@ -18,7 +19,7 @@ async function main() {
   const deployer = address(process.env.ARC_DEPLOYER_ADDRESS ?? account?.address ?? '');
   if (account && account.address.toLowerCase() !== deployer.toLowerCase()) throw new Error('Deployer address mismatch');
   const balance = await publicClient.getBalance({ address: deployer });
-  const data = encodeDeployData({ abi: factoryAbi, bytecode: artifact.bytecode, args: [USDC] });
+  const data = encodeDeployData({ abi: factoryAbi, bytecode: artifact.bytecode, args: [USDC, gateway] });
   const gas = await publicClient.estimateGas({ account: deployer, data });
   const fees = await publicClient.estimateFeesPerGas();
   const maxFeePerGas = fees.maxFeePerGas ?? fees.gasPrice;
@@ -33,9 +34,9 @@ async function main() {
   const path = `../contracts/arc/deployments/${chain.id}.json`;
   try { readFileSync(path); throw new Error('Deployment manifest already exists. Reconcile it before redeploying.'); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
   const wallet = createWalletClient({ account, chain, transport });
-  const hash = await wallet.deployContract({ abi: factoryAbi, bytecode: artifact.bytecode, args: [USDC], gas: gasLimit, maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas ?? 0n });
+  const hash = await wallet.deployContract({ abi: factoryAbi, bytecode: artifact.bytecode, args: [USDC, gateway], gas: gasLimit, maxFeePerGas, maxPriorityFeePerGas: fees.maxPriorityFeePerGas ?? 0n });
   mkdirSync('../contracts/arc/deployments', { recursive: true });
-  const manifest = { chainId: chain.id, officialRpc: chain.rpcUrls.default.http[0], deployer, usdc: USDC, erc20Decimals: 6, gasDecimals: 18, deploymentHash: hash, compiler: '0.8.30', optimizerRuns: 200, evmVersion: 'paris', submittedAt: new Date().toISOString(), status: 'pending' };
+  const manifest = { chainId: chain.id, officialRpc: chain.rpcUrls.default.http[0], deployer, usdc: USDC, gatewayWallet: gateway, erc20Decimals: 6, gasDecimals: 18, deploymentHash: hash, compiler: '0.8.30', optimizerRuns: 200, evmVersion: 'paris', submittedAt: new Date().toISOString(), status: 'pending' };
   // Save hash before waiting so a timeout can be reconciled without a second broadcast.
   writeFileSync(path, JSON.stringify(manifest, null, 2));
   console.log(`Submitted deployment: ${hash}`);

@@ -25,7 +25,7 @@ test('Arc SDK reads real local state, submits payment and fails closed after rev
       const hash = await wallet.writeContract(request);
       assert.equal((await publicClient.waitForTransactionReceipt({ hash })).status, 'success');
     };
-    const factoryHash = await wallet.deployContract({ abi: factoryAbi, bytecode: load('ArcVaultFactory').bytecode, args: [USDC] });
+    const factoryHash = await wallet.deployContract({ abi: factoryAbi, bytecode: load('ArcVaultFactory').bytecode, args: [USDC, '0x0000000000000000000000000000000000000000'] });
     const factory = (await publicClient.waitForTransactionReceipt({ hash: factoryHash })).contractAddress!;
     await write({ address: factory, abi: factoryAbi, functionName: 'createVault' });
     const vault = await publicClient.readContract({ address: factory, abi: factoryAbi, functionName: 'vaultOf', args: [owner.address] });

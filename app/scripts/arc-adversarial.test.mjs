@@ -30,7 +30,7 @@ test(`compromised agent cannot exceed owner policy (${ROUNDS} adversarial rounds
   const now = async () => (await pc.getBlock()).timestamp;
 
   const token = await deploy('TestToken');
-  const factory = await deploy('ArcVaultFactory', [token]);
+  const factory = await deploy('ArcVaultFactory', [token, '0x0000000000000000000000000000000000000000']);
   await send(wallets[0], factory, 'ArcVaultFactory', 'createVault');
   const vault = await read(factory, 'ArcVaultFactory', 'vaultOf', [owner.address]);
   await send(wallets[0], token, 'TestToken', 'mint', [owner.address, 1_000_000_000n]);

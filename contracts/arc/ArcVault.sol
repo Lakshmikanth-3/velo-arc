@@ -10,6 +10,11 @@ interface IMerchantRegistry {
     function approved(address merchant) external view returns (bool);
 }
 
+/// @notice Circle Gateway Wallet (x402 batched nanopayments). depositFor credits `depositor`'s Gateway balance.
+interface IGatewayWallet {
+    function depositFor(address token, address depositor, uint256 value) external;
+}
+
 /// @notice A curated list of merchants (APIs, data sellers, agents) that vault owners may opt into.
 contract MerchantRegistry is IMerchantRegistry {
     address public curator;
@@ -39,12 +44,14 @@ contract ArcVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
     address public immutable owner;
     IERC20 public immutable usdc;
+    /// Circle Gateway Wallet, or address(0) when Gateway funding is disabled.
+    address public immutable gatewayWallet;
     IMerchantRegistry public registry;
 
     struct Policy {
         uint256 maxTotal;      // lifetime ceiling, includes gas top-ups
         uint256 maxPayment;    // per payment
-        uint256 maxPerDay;     // rolling UTC-day ceiling
+        uint256 maxPerDay;     // per UTC-day ceiling
         uint256 gasAllowance;  // lifetime USDC the agent may draw for its own gas
         uint64 expiresAt;
         bool useRegistry;      // also allow merchants approved in `registry`
@@ -66,6 +73,11 @@ contract ArcVault is ReentrancyGuard {
     mapping(address => Capability) public capabilities;
     mapping(address => mapping(uint64 => mapping(address => bool))) private recipients;
     mapping(address => mapping(bytes32 => bool)) public usedPaymentIds;
+    /// Lifetime USDC an agent may move into its own Circle Gateway balance, and how much it has moved.
+    /// Gateway payments are signed off-chain by the agent's EOA (Gateway does not accept ERC-1271), so this
+    /// allowance is the most the agent can spend through Gateway; it also counts against maxTotal and maxPerDay.
+    mapping(address => uint256) public gatewayAllowance;
+    mapping(address => uint256) public gatewayFunded;
 
     error NotOwner();
     error InvalidInput();
@@ -76,9 +88,11 @@ contract ArcVault is ReentrancyGuard {
     error TotalLimit();
     error DailyLimit();
     error GasLimit();
+    error GatewayLimit();
     error InsufficientFunds();
     error DuplicatePayment();
     error UnsupportedToken();
+    error GatewayDisabled();
 
     event Funded(address indexed sender, uint256 amount);
     event Authorized(address indexed agent, uint64 version, uint256 maxTotal, uint256 maxPayment, uint256 maxPerDay, uint256 gasAllowance, uint64 expiresAt, bool useRegistry, address[] recipients);
@@ -89,12 +103,15 @@ contract ArcVault is ReentrancyGuard {
     event GasToppedUp(address indexed agent, uint256 amount, uint256 remainingBudget);
     event Revoked(address indexed agent);
     event Withdrawn(address indexed recipient, uint256 amount);
+    event GatewayAllowanceSet(address indexed agent, uint256 allowance);
+    event GatewayFunded(address indexed agent, uint256 amount, uint256 remainingBudget);
 
-    constructor(address owner_, address token_) {
+    constructor(address owner_, address token_, address gatewayWallet_) {
         if (owner_ == address(0) || token_ == address(0)) revert InvalidInput();
         if (IERC20Metadata(token_).decimals() != 6) revert UnsupportedToken();
         owner = owner_;
         usdc = IERC20(token_);
+        gatewayWallet = gatewayWallet_;
     }
     modifier onlyOwner() { if (msg.sender != owner) revert NotOwner(); _; }
 
@@ -151,6 +168,13 @@ contract ArcVault is ReentrancyGuard {
         registry = IMerchantRegistry(next);
         emit RegistrySet(next);
     }
+    /// Sets the lifetime Gateway funding ceiling for an agent. Lowering it below what was funded stops further funding.
+    function setGatewayAllowance(address agent, uint256 allowance) external onlyOwner {
+        if (gatewayWallet == address(0)) revert GatewayDisabled();
+        if (capabilities[agent].version == 0) revert InvalidInput();
+        gatewayAllowance[agent] = allowance;
+        emit GatewayAllowanceSet(agent, allowance);
+    }
     function revoke(address agent) external onlyOwner nonReentrant {
         capabilities[agent].active = false;
         emit Revoked(agent);
@@ -190,6 +214,23 @@ contract ArcVault is ReentrancyGuard {
         usdc.safeTransfer(msg.sender, amount);
         emit GasToppedUp(msg.sender, amount, c.maxTotal - c.spent);
     }
+    /// Moves USDC from the vault into the calling agent's Circle Gateway balance, so it can pay any x402 seller
+    /// through Gateway. Bounded by the Gateway allowance, lifetime budget, daily limit, expiry and revocation.
+    function fundGateway(uint256 amount) external nonReentrant {
+        if (gatewayWallet == address(0)) revert GatewayDisabled();
+        Capability storage c = capabilities[msg.sender];
+        if (amount == 0) revert InvalidInput();
+        uint256 funded = gatewayFunded[msg.sender];
+        if (funded >= gatewayAllowance[msg.sender] || amount > gatewayAllowance[msg.sender] - funded) revert GatewayLimit();
+        _spend(c, amount);
+        gatewayFunded[msg.sender] = funded + amount;
+        uint256 beforeBalance = balance();
+        usdc.forceApprove(gatewayWallet, amount);
+        IGatewayWallet(gatewayWallet).depositFor(address(usdc), msg.sender, amount);
+        usdc.forceApprove(gatewayWallet, 0);
+        if (beforeBalance - balance() != amount) revert UnsupportedToken();
+        emit GatewayFunded(msg.sender, amount, c.maxTotal - c.spent);
+    }
     function withdraw(uint256 amount) external onlyOwner nonReentrant {
         if (amount == 0) revert InvalidInput();
         if (amount > balance()) revert InsufficientFunds();
@@ -200,16 +241,19 @@ contract ArcVault is ReentrancyGuard {
 
 contract ArcVaultFactory {
     address public immutable usdc;
+    address public immutable gatewayWallet;
     mapping(address => address) public vaultOf;          // latest vault per owner
     mapping(address => address[]) private _vaults;
     event VaultCreated(address indexed owner, address indexed vault);
-    constructor(address token) {
+    /// gateway is Circle's Gateway Wallet on this chain, or address(0) to disable Gateway funding.
+    constructor(address token, address gateway) {
         if (IERC20Metadata(token).decimals() != 6) revert ArcVault.UnsupportedToken();
         usdc = token;
+        gatewayWallet = gateway;
     }
     /// Owners may create several vaults (e.g. one per team or agent group).
     function createVault() external returns (address vault) {
-        vault = address(new ArcVault(msg.sender, usdc));
+        vault = address(new ArcVault(msg.sender, usdc, gatewayWallet));
         vaultOf[msg.sender] = vault;
         _vaults[msg.sender].push(vault);
         emit VaultCreated(msg.sender, vault);

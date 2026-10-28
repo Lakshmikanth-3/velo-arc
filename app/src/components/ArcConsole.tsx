@@ -25,6 +25,8 @@ function describeEvent(name: string, a: Record<string, unknown>) {
     case 'GasToppedUp': return `Agent ${short(a.agent)} drew ${usdc(a.amount)} for gas · ${usdc(a.remainingBudget)} budget left`;
     case 'Revoked': return `Agent ${short(a.agent)} revoked`;
     case 'Withdrawn': return `${usdc(a.amount)} withdrawn to owner ${short(a.recipient)}`;
+    case 'GatewayAllowanceSet': return `Agent ${short(a.agent)} may move up to ${usdc(a.allowance)} into Circle Gateway`;
+    case 'GatewayFunded': return `Agent ${short(a.agent)} moved ${usdc(a.amount)} into its Circle Gateway balance · ${usdc(a.remainingBudget)} budget left`;
     default: return name;
   }
 }
@@ -49,6 +51,9 @@ export default function ArcConsole({ networkName, rpcUrl, factoryAddress = '', i
   const [perPayment, setPerPayment] = useState('0.1');
   const [perDay, setPerDay] = useState('');
   const [gas, setGas] = useState('0');
+  const [gatewayCap, setGatewayCap] = useState('0');
+  // undefined: vault predates Gateway funding; enabled=false: deployed without a Gateway Wallet.
+  const [gateway, setGateway] = useState<{ enabled: boolean; allowance?: bigint; funded?: bigint }>();
   const [useRegistry, setUseRegistry] = useState(false);
   const [registryText, setRegistryText] = useState('');
   const [expires, setExpires] = useState('');
@@ -131,7 +136,20 @@ export default function ArcConsole({ networkName, rpcUrl, factoryAddress = '', i
     const [b, o, block] = await Promise.all([client.readContract({ address: v, abi: vaultAbi, functionName: 'balance' }), client.readContract({ address: v, abi: vaultAbi, functionName: 'owner' }), client.getBlock()]);
     setBalance(b); setOwner(o); setNow(block.timestamp);
     if (agent) setPolicy(toCapability(await client.readContract({ address: v, abi: vaultAbi, functionName: 'capabilities', args: [address(agent)] })));
+    await loadGateway(v);
     await loadLogs(before);
+  }
+  async function loadGateway(v: Address) {
+    let wallet: Address;
+    try { wallet = await client.readContract({ address: v, abi: vaultAbi, functionName: 'gatewayWallet' }); }
+    catch { setGateway(undefined); return; }
+    const enabled = wallet !== '0x0000000000000000000000000000000000000000';
+    if (!enabled || !agent) { setGateway({ enabled }); return; }
+    const [allowance, funded] = await Promise.all([
+      client.readContract({ address: v, abi: vaultAbi, functionName: 'gatewayAllowance', args: [address(agent)] }),
+      client.readContract({ address: v, abi: vaultAbi, functionName: 'gatewayFunded', args: [address(agent)] }),
+    ]);
+    setGateway({ enabled, allowance, funded });
   }
   const toRow = (l: { transactionHash: Hash; blockNumber: bigint; eventName: string; args: unknown }): Row => ({ hash: l.transactionHash, block: l.blockNumber, event: l.eventName, args: l.args as Record<string, unknown>, detail: describeEvent(l.eventName, l.args as Record<string, unknown>) });
   // RPC log reads, with the Arc explorer (Blockscout) API as a fallback indexer.
@@ -163,7 +181,7 @@ export default function ArcConsole({ networkName, rpcUrl, factoryAddress = '', i
     const { request } = await client.simulateContract({ account: account!, address: to ?? await validateVault(), abi: vaultAbi, functionName: fn, args } as never);
     await confirmed(await wallet.writeContract(request as never)); await refresh();
   }
-  async function mutate(fn: 'deposit' | 'withdraw' | 'revoke' | 'authorize' | 'pay' | 'topUpGas') {
+  async function mutate(fn: 'deposit' | 'withdraw' | 'revoke' | 'authorize' | 'pay' | 'topUpGas' | 'fundGateway') {
     const v = await validateVault();
     if (fn === 'deposit') {
       const wallet = await signer(); const units = usdcAmount(amount);
@@ -171,7 +189,7 @@ export default function ArcConsole({ networkName, rpcUrl, factoryAddress = '', i
       await confirmed(await wallet.writeContract(request));
       return write('deposit', [units], v);
     }
-    if (fn === 'withdraw' || fn === 'topUpGas') return write(fn, [usdcAmount(amount)], v);
+    if (fn === 'withdraw' || fn === 'topUpGas' || fn === 'fundGateway') return write(fn, [usdcAmount(amount)], v);
     if (fn === 'revoke') return write(fn, [address(agent)], v);
     if (fn === 'authorize') {
       const seconds = Math.floor(Date.parse(expires) / 1000);
@@ -196,10 +214,10 @@ export default function ArcConsole({ networkName, rpcUrl, factoryAddress = '', i
     const agents = new Set<string>();
     for (const r of history) {
       if (r.event === 'Authorized') agents.add(String(r.args.agent));
-      if (r.event !== 'Paid' && r.event !== 'GasToppedUp') continue;
+      if (r.event !== 'Paid' && r.event !== 'GasToppedUp' && r.event !== 'GatewayFunded') continue;
       const a = String(r.args.agent), amt = BigInt(r.args.amount as bigint);
       byAgent.set(a, (byAgent.get(a) ?? 0n) + amt);
-      const to = r.event === 'Paid' ? String(r.args.recipient) : 'gas';
+      const to = r.event === 'Paid' ? String(r.args.recipient) : r.event === 'GatewayFunded' ? 'gateway' : 'gas';
       byRecipient.set(to, (byRecipient.get(to) ?? 0n) + amt);
     }
     return { byAgent, byRecipient, agents: [...agents] };
@@ -251,13 +269,17 @@ export default function ArcConsole({ networkName, rpcUrl, factoryAddress = '', i
       <div className="arc-actions">{button('Allow recipient', () => write('setRecipient', [address(agent), address(single), true]), !isOwner || wrongChain || !single)} {button('Remove recipient', () => write('setRecipient', [address(agent), address(single), false]), !isOwner || wrongChain || !single, 'secondary')}</div>
       {field('Merchant registry address', registryText, setRegistryText)}
       {button('Set merchant registry', () => write('setRegistry', [registryText ? address(registryText) : '0x0000000000000000000000000000000000000000']), !isOwner || wrongChain, 'secondary')}
+      <div className="arc-divider" />
+      {field('Circle Gateway allowance (USDC, lifetime)', gatewayCap, setGatewayCap)}
+      {button('Set Gateway allowance', () => write('setGatewayAllowance', [address(agent), usdcAmount(gatewayCap || '0', true)]), !isOwner || wrongChain || !agent || !gateway?.enabled, 'secondary')}
+      <p>{gateway === undefined ? 'This vault was deployed before Circle Gateway funding. Create a vault from the current factory to use it.' : !gateway.enabled ? 'Circle Gateway funding is disabled for this vault.' : `The agent can move up to this much into its own Circle Gateway balance and pay any x402 seller with it. It counts against the lifetime budget and daily limit; once moved, revoking does not pull it back.${gateway.allowance === undefined ? '' : ` Moved: ${displayUsdc(gateway.funded ?? 0n)} of ${displayUsdc(gateway.allowance)} USDC.`}`}</p>
     </div></section>
     <section id="arc-payments"><div className="arc-panel-head"><span className="arc-panel-icon"><Send size={18} /></span><div><h2>Execute a payment</h2><p>04 / Sign with the authorized agent wallet</p></div></div><div className="arc-fields"><p>Connect the authorized agent wallet, load the vault and pay. Leave the invoice ID empty to generate one; it is hashed on-chain so the same invoice can never be paid twice. A server agent can use the Velo402 SDK.</p>
       {field('Payment recipient', recipient, setRecipient)} {field('Unique invoice / payment ID', paymentId, setPaymentId, 'text', 'auto-generated if empty')}
-      <div className="arc-actions">{button('Pay USDC', () => mutate('pay'), !account || wrongChain || !vault)} {button('Draw gas from allowance', () => mutate('topUpGas'), !account || wrongChain || !vault, 'secondary')}</div>
+      <div className="arc-actions">{button('Pay USDC', () => mutate('pay'), !account || wrongChain || !vault)} {button('Draw gas from allowance', () => mutate('topUpGas'), !account || wrongChain || !vault, 'secondary')} {button('Fund Circle Gateway balance', () => mutate('fundGateway'), !account || wrongChain || !vault || !gateway?.enabled, 'secondary')}</div>
     </div></section></div></div>
     <section id="arc-dashboard"><div className="arc-panel-head"><span className="arc-panel-icon"><BarChart3 size={18} /></span><div><h2>Spending dashboard</h2><p>From loaded contract events · {stats.agents.length} agent(s) authorized</p></div></div>
-      {stats.byAgent.size === 0 ? <p>No agent spending in the loaded window.</p> : <div className="arc-info-grid"><div><h3 className="arc-mini">By agent</h3>{bars(stats.byAgent, short)}</div><div><h3 className="arc-mini">By recipient</h3>{bars(stats.byRecipient, k => k === 'gas' ? 'Agent gas' : short(k))}</div></div>}
+      {stats.byAgent.size === 0 ? <p>No agent spending in the loaded window.</p> : <div className="arc-info-grid"><div><h3 className="arc-mini">By agent</h3>{bars(stats.byAgent, short)}</div><div><h3 className="arc-mini">By recipient</h3>{bars(stats.byRecipient, k => k === 'gas' ? 'Agent gas' : k === 'gateway' ? 'Circle Gateway' : short(k))}</div></div>}
     </section>
     <section id="arc-history"><div className="arc-panel-head"><span className="arc-panel-icon"><History size={18} /></span><div><h2>Contract event history</h2><p>Confirmed activity, read directly from Arc</p></div></div><p>Loaded from block {historyFrom === undefined ? 'unknown' : String(historyFrom)}. New events appear here and as alerts while this page is open.</p>
       {history.length === 0 ? <div className="arc-empty"><History size={24} /><strong>No events loaded</strong><p>Load a vault and refresh its on-chain state to inspect activity.</p></div> : history.map((row, i) => <div key={`${row.hash}-${i}`} className="arc-event"><a href={`${chain.blockExplorers.default.url}/tx/${row.hash}`} target="_blank" rel="noreferrer">{row.event} · block {String(row.block)} ↗</a><p className="arc-event-detail">{row.detail}</p></div>)}

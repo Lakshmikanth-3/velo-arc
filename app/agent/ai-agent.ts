@@ -42,7 +42,7 @@ export async function chat(baseUrl: string, body: unknown, onRotate?: (i: number
 export async function runAgent(opts: { task?: string; scripted?: boolean; maxPrice?: string; onStep?: (s: Step) => void } = {}) {
   const net = (process.env.ARC_NETWORK ?? 'testnet') as 'mainnet' | 'testnet';
   const base = process.env.X402_BASE_URL ?? 'https://velo402.vercel.app';
-  const q = net === 'mainnet' ? '?network=mainnet' : '';
+  const q = `?network=${net}`;
   const events: ArcEvent[] = [];
   const agent = new ArcAgent(privateKeyToAccount(process.env.ARC_AGENT_PRIVATE_KEY as Hex), process.env.ARC_VAULT_ADDRESS ?? '', net, { rpc: process.env.ARC_RPC_URL, onEvent: async e => { events.push(e); await notify(e); } });
   const maxPrice = BigInt(Math.round(Number(opts.maxPrice ?? '0.05') * 1e6));

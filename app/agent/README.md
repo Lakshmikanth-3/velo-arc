@@ -1,92 +1,33 @@
-# @velo402/sdk
+# Velo402 agents on Arc
 
-**Velo402 Agent SDK** — Drop-in TypeScript client for autonomous AI agents to interact with the Velo402 capability wallet on Sui.
+Scripts that run an AI agent against a Velo402 vault on Arc, and alert the owner about what it does. The agent holds its own key, but the vault contract decides every payment, so a manipulated agent still cannot spend outside the owner's policy.
 
-## Install
+The SDK they use is [`sdk/`](../../sdk) (re-exported by [`arc-sdk.ts`](arc-sdk.ts)).
+
+| Script | Command | What it does |
+| --- | --- | --- |
+| [`arc-runner.ts`](arc-runner.ts) | `pnpm arc:agent` | Prints the agent's vault state (budget, daily remaining, expiry). Add `--execute` to make a payment. |
+| [`ai-agent.ts`](ai-agent.ts) | `pnpm arc:ai-agent` | An LLM agent that buys data from the HTTP 402 API, paying from the vault. One paid resource contains a prompt injection; the vault rejects the injected payment either way. |
+| [`watch.ts`](watch.ts) | `pnpm arc:watch` | Owner side: polls the vault and forwards every `Paid`, `GasToppedUp` and `Revoked` event to the alert channels. |
+| [`alerts.ts`](alerts.ts) | (library) | Sends alerts to a generic webhook (Discord, Slack, Zapier) and/or Telegram. |
+
+## Environment
+
+| Variable | Used by | Notes |
+| --- | --- | --- |
+| `ARC_NETWORK` | all | `mainnet` or `testnet`. Defaults: runner `mainnet`, AI agent and watcher `testnet`; set it explicitly. |
+| `ARC_AGENT_PRIVATE_KEY` | runner, AI agent | A dedicated agent key, never the owner's |
+| `ARC_VAULT_ADDRESS` | all | The vault that authorized this agent |
+| `ARC_RPC_URL` | runner | Optional RPC override |
+| `X402_BASE_URL` | AI agent | Base URL of the HTTP 402 API, e.g. `https://velo402.vercel.app` |
+| `LLM_BASE_URL`, `LLM_API_KEYS`, `LLM_MODEL` | AI agent | Any OpenAI-compatible API (Groq by default; Ollama locally). Without them, run with `--scripted`. |
+| `ALERT_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | watcher | All optional |
+
+## Example
 
 ```bash
-npm install @velo402/sdk
-# or
-pnpm add @velo402/sdk
+ARC_NETWORK=mainnet ARC_VAULT_ADDRESS=0x... ARC_AGENT_PRIVATE_KEY=0x... \
+X402_BASE_URL=https://velo402.vercel.app pnpm arc:ai-agent --scripted
 ```
 
-## Quick Start
-
-```typescript
-import { Velo402Agent, SCOPES } from '@velo402/sdk';
-
-const agent = new Velo402Agent({
-  apiBase: 'https://your-velo402-deployment.vercel.app',
-});
-
-// Check remaining budget
-const status = await agent.policyStatus();
-console.log(`Remaining: ${Number(status.policy.remainingBudget) / 1e9} SUI`);
-
-// Pay a 402 invoice and get the data
-const { data, digest } = await agent.payAndFetch('/api/knowledge/sentiment');
-
-// Run Guardian pre-flight check (real Pyth oracle)
-const risk = await agent.guardianCheck({
-  action: 'BUY',
-  amountSui: 0.1,
-  scopeTag: SCOPES.DEEPBOOK_SPOT,
-});
-if (risk.blocks.length === 0) {
-  await agent.trade({ action: 'BUY', amountSui: 0.1, scopeTag: SCOPES.DEEPBOOK_SPOT });
-}
-
-// Run a full autonomous cycle
-const result = await agent.runCycle({ tradeAmountSui: 0.05 });
-```
-
-## API Reference
-
-### `new Velo402Agent(config?)`
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `apiBase` | `string` | `'http://localhost:3000'` | Base URL of the Velo402 Next.js app |
-| `fetch` | `fetch` | `globalThis.fetch` | Custom fetch (for testing) |
-
-### Methods
-
-| Method | Returns | Description |
-|---|---|---|
-| `policyStatus()` | `PolicyStatus` | Live PolicyCap state + Treasury balance |
-| `hasBudget(minSui?)` | `boolean` | Quick budget check |
-| `guardianCheck(params)` | `GuardianResult` | Pyth-oracle risk pre-flight |
-| `trade(params)` | `TradeResult` | DeepBook Spot/Margin/Predict |
-| `payAndFetch(endpoint)` | `{data, digest}` | Full 402 pay-and-retry cycle |
-| `yieldStatus()` | `YieldStatus` | Scallop APY + Pyth price |
-| `sweepToYield(amountSui?)` | `SweepResult` | On-chain yield sweep |
-| `getAttestation()` | `NautilusAttestation` | PCR0 enclave measurement |
-| `runCycle(opts?)` | Cycle summary | Full autonomous loop |
-
-### `SCOPES` constant
-
-```typescript
-SCOPES.DATA_402          = 1  // Pay HTTP 402 invoices
-SCOPES.DEEPBOOK_SPOT     = 2  // SUI/DBUSDC spot orders
-SCOPES.DEEPBOOK_MARGIN   = 3  // DEEP/SUI leveraged orders  
-SCOPES.DEEPBOOK_PREDICT  = 4  // WAL/SUI predict positions
-```
-
-### `TESTNET_OBJECTS` constant
-
-```typescript
-TESTNET_OBJECTS.package  = '0xd88c09bd...'
-TESTNET_OBJECTS.treasury = '0x9cd52cd7...'
-TESTNET_OBJECTS.registry = '0xe2077a15...'
-```
-
-## Live Testnet Objects
-
-| Object | Address |
-|---|---|
-| Package | `0xd88c09bd00a9891035fdb1e975ada7a4ae6c220f2ddc2b06771d9d7eeb278c69` |
-| Treasury | `0x9cd52cd75dbb9743b9b67a9366a019d5b2bc6595aa8424839a64d8a1d78129fa` |
-| DeepBook Spot Pool | `0x1c19362ca52b8ffd7a33cee805a67d40f31e6ba303753fd3a4cfdfacea7163a5` |
-| DeepBook Margin Pool | `0x48c95963e9eac37a316b7ae04a0deb761bcdcc2b67912374d6036e7f0e9bae9f` |
-| DeepBook Predict Pool | `0x8c1c1b186c4fddab1ebd53e0895a36c1d1b3b9a77cd34e607bef49a38af0150a` |
-| Walrus Blob (Pyth data) | `_SBjvQk91_1Q71Zgp5R_pt72rqE5iDjP5kGioBTRkiQ` |
+The mainnet run recorded in the main README is in [`contracts/arc/deployments/5042-ai-agent-run.log`](../../contracts/arc/deployments/5042-ai-agent-run.log).

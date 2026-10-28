@@ -17,8 +17,8 @@ export const resources: Record<string, Resource> = {
 const INVOICE_TTL = 300; // seconds a 402 challenge stays payable
 
 export type Net = 'mainnet' | 'testnet';
-/** Network for a request: ?network=mainnet|testnet, else X402_NETWORK, else testnet. */
-export const requestNetwork = (q: string | null): Net => q === 'mainnet' || q === 'testnet' ? q : (process.env.X402_NETWORK === 'mainnet' ? 'mainnet' : 'testnet');
+/** Network for a request: ?network=mainnet|testnet, else X402_NETWORK, else mainnet. */
+export const requestNetwork = (q: string | null): Net => q === 'mainnet' || q === 'testnet' ? q : (process.env.X402_NETWORK === 'testnet' ? 'testnet' : 'mainnet');
 export function merchantConfig(net: Net = requestNetwork(null)) {
   const chain = network(net);
   const d = net === 'mainnet' ? mainnetDeployment : testnetDeployment;

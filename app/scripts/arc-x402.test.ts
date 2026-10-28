@@ -9,7 +9,7 @@ import { ArcAgent, fetchWithPayment, encodePayment, PAYMENT_HEADER } from '../ag
 
 const BASE = process.env.X402_BASE_URL ?? 'https://velo402.vercel.app';
 const agent = new ArcAgent(privateKeyToAccount(process.env.ARC_AGENT_PRIVATE_KEY as Hex), deployment.vault, 'testnet');
-const get = (path: string, proof?: { txHash: Hex; invoice: string }) => fetch(`${BASE}${path}`, { headers: proof ? { [PAYMENT_HEADER]: encodePayment(proof) } : {} });
+const get = (path: string, proof?: { txHash: Hex; invoice: string }) => fetch(`${BASE}${path}?network=testnet`, { headers: proof ? { [PAYMENT_HEADER]: encodePayment(proof) } : {} });
 
 test('x402: challenge, pay, verify, and reject forged or reused proofs', { timeout: 300_000 }, async t => {
   let proof: { txHash: Hex; invoice: string };
@@ -21,7 +21,7 @@ test('x402: challenge, pay, verify, and reject forged or reused proofs', { timeo
     assert.equal(c.accepts[0].payTo.toLowerCase(), deployment.merchant.toLowerCase());
   });
   await t.test('agent pays from its vault and receives real Arc data', async () => {
-    const { response, paid, requirement } = await fetchWithPayment(agent, `${BASE}/api/x402/arc-stats`);
+    const { response, paid, requirement } = await fetchWithPayment(agent, `${BASE}/api/x402/arc-stats?network=testnet`);
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.data.chainId, 5042002);
@@ -39,7 +39,7 @@ test('x402: challenge, pay, verify, and reject forged or reused proofs', { timeo
     assert.equal((await get('/api/x402/arc-stats', { txHash: other, invoice: proof.invoice })).status, 402);
   });
   await t.test('malformed proofs are rejected', async () => {
-    const r = await fetch(`${BASE}/api/x402/arc-stats`, { headers: { [PAYMENT_HEADER]: 'not-base64-json' } });
+    const r = await fetch(`${BASE}/api/x402/arc-stats?network=testnet`, { headers: { [PAYMENT_HEADER]: 'not-base64-json' } });
     assert.equal(r.status, 400);
   });
 });

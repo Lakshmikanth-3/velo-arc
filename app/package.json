@@ -9,7 +9,7 @@
     "arc:testnet:setup": "tsx scripts/arc-testnet-setup.ts",
     "arc:testnet:e2e": "tsx --env-file=.env.arc-testnet --test scripts/arc-testnet-e2e.test.ts",
     "arc:testnet:browser": "tsx --env-file=.env.arc-testnet --test scripts/arc-browser-testnet.test.ts",
-    "arc:test": "node --test scripts/arc-contract.test.mjs scripts/arc-adversarial.test.mjs && tsx --test src/lib/arc/config.test.ts scripts/arc-sdk.test.ts",
+    "arc:test": "node --test scripts/arc-contract.test.mjs scripts/arc-adversarial.test.mjs && tsx --test src/lib/arc/config.test.ts scripts/arc-sdk.test.ts scripts/arc-gateway-buyer.test.ts",
     "arc:preflight": "tsx scripts/arc-deploy.ts",
     "arc:deploy": "tsx scripts/arc-deploy.ts --broadcast",
     "arc:smoke": "tsx scripts/arc-smoke.ts",
@@ -29,6 +29,7 @@
     "arc:test:ui-full": "tsx --test scripts/arc-ui-full.test.ts"
   },
   "dependencies": {
+    "@circle-fin/x402-batching": "4.0.0",
     "lucide-react": "^1.20.0",
     "next": "16.2.9",
     "react": "19.2.4",

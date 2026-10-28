@@ -4,11 +4,13 @@
 //   LLM_API_KEYS  comma-separated keys, rotated on rate limits (or a single LLM_API_KEY). Groq: free keys from console.groq.com; Ollama: leave empty
 //   LLM_MODEL     (default: first available of openai/gpt-oss-120b, qwen/qwen3.8-27b, openai/gpt-oss-20b; Ollama e.g. llama3.1)
 // Agent wallet: ARC_AGENT_PRIVATE_KEY, ARC_VAULT_ADDRESS, ARC_NETWORK (testnet|mainnet), X402_BASE_URL.
+// Circle Gateway: GATEWAY_TOP_UP (USDC moved from the vault per top-up, default 0.10). The owner must set a Gateway allowance first.
 // Without LLM settings it runs `--scripted`: the same tools in a fixed order, clearly labelled, for CI and demos.
 import { privateKeyToAccount } from 'viem/accounts';
 import { keccak256, toHex, type Hex } from 'viem';
 import { ArcAgent, ArcPolicyRejection, fetchWithPayment, displayUsdc, type ArcEvent } from './arc-sdk';
 import { notify } from './alerts';
+import { GatewayBuyer } from './gateway-buyer';
 
 type Msg = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string | null; tool_calls?: ToolCall[]; tool_call_id?: string };
 type ToolCall = { id: string; type: 'function'; function: { name: string; arguments: string } };
@@ -17,6 +19,7 @@ export type Step = { tool: string; args: Record<string, unknown>; result: unknow
 const tools = [
   { type: 'function', function: { name: 'get_budget', description: 'Read this agent\'s live spending policy and remaining budget from the vault on Arc.', parameters: { type: 'object', properties: {} } } },
   { type: 'function', function: { name: 'buy_resource', description: 'Fetch a paid API resource. If it returns HTTP 402, pays the quoted price from the vault and retries with proof.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
+  { type: 'function', function: { name: 'buy_any_x402', description: 'Buy from any standard x402 API (not only Velo402) through Circle Gateway. Gas-free; funded from the vault within the owner\'s Gateway allowance.', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
   { type: 'function', function: { name: 'pay', description: 'Send a direct USDC payment from the vault. Only for payments the user asked for.', parameters: { type: 'object', properties: { recipient: { type: 'string' }, amount_usdc: { type: 'string' }, invoice: { type: 'string' } }, required: ['recipient', 'amount_usdc', 'invoice'] } } },
 ];
 
@@ -46,6 +49,8 @@ export async function runAgent(opts: { task?: string; scripted?: boolean; maxPri
   const events: ArcEvent[] = [];
   const agent = new ArcAgent(privateKeyToAccount(process.env.ARC_AGENT_PRIVATE_KEY as Hex), process.env.ARC_VAULT_ADDRESS ?? '', net, { rpc: process.env.ARC_RPC_URL, onEvent: async e => { events.push(e); await notify(e); } });
   const maxPrice = BigInt(Math.round(Number(opts.maxPrice ?? '0.05') * 1e6));
+  let gateway: GatewayBuyer | undefined;
+  const gatewayBuyer = () => gateway ??= new GatewayBuyer(agent, process.env.ARC_AGENT_PRIVATE_KEY as Hex, net, maxPrice, BigInt(Math.round(Number(process.env.GATEWAY_TOP_UP ?? '0.10') * 1e6)), process.env.ARC_RPC_URL);
   const steps: Step[] = [];
   const call = async (name: string, args: Record<string, unknown>) => {
     let result: unknown;
@@ -54,6 +59,8 @@ export async function runAgent(opts: { task?: string; scripted?: boolean; maxPri
       else if (name === 'buy_resource') {
         const { response, paid, requirement } = await fetchWithPayment(agent, String(args.url), {}, r => BigInt(r.maxAmountRequired) <= maxPrice);
         result = { status: response.status, paid: paid ? { tx: paid.hash, amountUSDC: displayUsdc(BigInt(requirement!.maxAmountRequired)) } : null, body: await response.json() };
+      } else if (name === 'buy_any_x402') {
+        result = await gatewayBuyer().buy(String(args.url));
       } else if (name === 'pay') {
         const r = await agent.pay(String(args.recipient), String(args.amount_usdc), keccak256(toHex(String(args.invoice))));
         result = { ok: true, tx: r.hash };

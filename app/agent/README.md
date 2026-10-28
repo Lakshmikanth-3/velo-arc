@@ -8,6 +8,7 @@ The SDK they use is [`sdk/`](../../sdk) (re-exported by [`arc-sdk.ts`](arc-sdk.t
 | --- | --- | --- |
 | [`arc-runner.ts`](arc-runner.ts) | `pnpm arc:agent` | Prints the agent's vault state (budget, daily remaining, expiry). Add `--execute` to make a payment. |
 | [`ai-agent.ts`](ai-agent.ts) | `pnpm arc:ai-agent` | An LLM agent that buys data from the HTTP 402 API, paying from the vault. One paid resource contains a prompt injection; the vault rejects the injected payment either way. |
+| [`gateway-buyer.ts`](gateway-buyer.ts) | (library, `buy_any_x402` tool) | Pays **any** standard x402 seller through Circle Gateway. Refuses prices above the agent's cap before signing, and tops up its Gateway balance from the vault (`fundGateway`) when it runs low. |
 | [`watch.ts`](watch.ts) | `pnpm arc:watch` | Owner side: polls the vault and forwards every `Paid`, `GasToppedUp` and `Revoked` event to the alert channels. |
 | [`alerts.ts`](alerts.ts) | (library) | Sends alerts to a generic webhook (Discord, Slack, Zapier) and/or Telegram. |
 
@@ -21,6 +22,7 @@ The SDK they use is [`sdk/`](../../sdk) (re-exported by [`arc-sdk.ts`](arc-sdk.t
 | `ARC_RPC_URL` | runner | Optional RPC override |
 | `X402_BASE_URL` | AI agent | Base URL of the HTTP 402 API, e.g. `https://velo402.vercel.app` |
 | `LLM_BASE_URL`, `LLM_API_KEYS`, `LLM_MODEL` | AI agent | Any OpenAI-compatible API (Groq by default; Ollama locally). Without them, run with `--scripted`. |
+| `GATEWAY_TOP_UP` | AI agent | USDC moved from the vault per Gateway top-up (default `0.10`). The owner must set a Gateway allowance first. |
 | `ALERT_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | watcher | All optional |
 
 ## Example
